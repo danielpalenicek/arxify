@@ -261,6 +261,7 @@ def main():
                 )
 
         print("The following source files will be included in the zip archive:")
+        zip_path.mkdir()
         for tf in sorted(required_files):
             output_path = zip_path / tf.relative_to(tmp_root)
             output_path.parent.mkdir(parents=True, exist_ok=True)
