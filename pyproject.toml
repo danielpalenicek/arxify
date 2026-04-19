@@ -9,13 +9,11 @@ authors = [
     { name = "Tim Schneider", email = "tim@robot-learning.de" },
 ]
 urls = { Homepage = "https://github.com/TimSchneider42/arxify" }
-dependencies = [
-    "watchdog"
-]
+dependencies = []
 classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
-    "Operating System :: POSIX :: Linux",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3.10"
 ]
 

@@ -11,9 +11,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Iterable
 
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
-
 
 def find_files(root: Path) -> list[Path]:
     own_files = (f for f in root.iterdir() if f.is_file())
@@ -38,13 +35,29 @@ def process_tex_file(path: Path) -> str:
     return "\n".join(lines_filtered)
 
 
-class FileOpenHandler(FileSystemEventHandler):
-    def __init__(self, opened_files: set[Path]):
-        self.opened_files = opened_files
-
-    def on_opened(self, event):
-        if not event.is_directory:
-            self.opened_files.add(Path(event.src_path))
+def parse_fls_inputs(fls_path: Path, root: Path) -> set[Path]:
+    # The .fls file is produced by pdflatex/lualatex with -recorder. Every line
+    # has one of three fixed prefixes: "PWD <dir>", "INPUT <path>", or
+    # "OUTPUT <path>". Relative paths are relative to PWD.
+    pwd = None
+    inputs = set()
+    for line in fls_path.read_text().splitlines():
+        prefix, sep, rest = line.partition(" ")
+        if not sep:
+            continue
+        if prefix == "PWD":
+            pwd = Path(rest)
+        elif prefix == "INPUT":
+            p = Path(rest)
+            if not p.is_absolute() and pwd is not None:
+                p = pwd / p
+            try:
+                p = p.resolve()
+            except OSError:
+                continue
+            if root in p.parents or p == root:
+                inputs.add(p)
+    return inputs
 
 
 def compile_and_find_required_files(
@@ -54,36 +67,26 @@ def compile_and_find_required_files(
     compiler: str = "pdflatex",
     shell_escape: bool = False,
 ) -> set[Path]:
-    opened_files = set()
+    subprocess.check_call(
+        [
+            compiler,
+            *(["--shell-escape"] if shell_escape else []),
+            "--interaction=nonstopmode",
+            "--halt-on-error",
+            "-recorder",
+            "--output-directory",
+            str(latex_out),
+            str(main_tex_file_rel),
+        ],
+        cwd=root,
+    )
 
-    # Set up the watchdog observer and event handler
-    event_handler = FileOpenHandler(opened_files)
-    observer = Observer()
-    observer.schedule(event_handler, str(root), recursive=True)
-
-    # Start observing
-    observer.start()
-
-    try:
-        # Run the LaTeX compiler
-        subprocess.check_call(
-            [
-                compiler,
-                *(["--shell-escape"] if shell_escape else []),
-                "--interaction=nonstopmode",
-                "--halt-on-error",
-                "--output-directory",
-                str(latex_out),
-                str(main_tex_file_rel),
-            ],
-            cwd=root,
+    fls_path = latex_out / (main_tex_file_rel.stem + ".fls")
+    if not fls_path.exists():
+        raise RuntimeError(
+            f"Expected recorder file {fls_path} was not produced by {compiler}."
         )
-    finally:
-        # Stop observing
-        observer.stop()
-        observer.join()
-
-    return opened_files
+    return parse_fls_inputs(fls_path, root.resolve())
 
 
 def find_tikz_externalize_dirs(search_files: Iterable[Path]) -> list[Path]:
@@ -154,7 +157,9 @@ def main():
     main_tex_file_rel = main_tex_file.relative_to(root)
 
     with TemporaryDirectory() as td:
-        td_path = Path(td)
+        # Resolve to follow symlinks like macOS's /var -> /private/var, so that
+        # paths recorded by pdflatex (which are always real paths) match.
+        td_path = Path(td).resolve()
         tmp_root = td_path / "root"
         latex_out = td_path / "out"
         zip_path = td_path / "zip"
